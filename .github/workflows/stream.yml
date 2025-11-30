@@ -1,9 +1,48 @@
-- name: Stream to Telegram
+name: Telegram RTMP Stream
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/50 * * * *'
+
+jobs:
+  stream:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+    
+    - name: Install FFmpeg and Stunnel
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg stunnel4
+    
+    - name: Configure Stunnel for RTMPS
       env:
         RTMP_URL: ${{ secrets.RTMP_URL }}
+      run: |
+        # استخراج hostname و port
+        RTMP_HOST=$(echo $RTMP_URL | sed 's|rtmps://||' | sed 's|/.*||')
+        
+        # ساخت فایل کانفیگ Stunnel
+        cat > stunnel.conf <<EOF
+        [rtmps]
+        client = yes
+        accept = 127.0.0.1:1935
+        connect = $RTMP_HOST:443
+        EOF
+        
+        # اجرای Stunnel در پس‌زمینه
+        stunnel stunnel.conf &
+        sleep 3
+    
+    - name: Stream to Telegram via Stunnel
+      env:
         STREAM_KEY: ${{ secrets.STREAM_KEY }}
       run: |
-        # استریم با پشتیبانی RTMPS
+        # استریم به localhost که Stunnel اونو به تلگرام forward می‌کنه
         ffmpeg -re -loop 1 -framerate 25 -i Aramis.jpg \
                -stream_loop -1 -i music.mp3 \
                -c:v libx264 -preset ultrafast -tune zerolatency \
@@ -12,5 +51,4 @@
                -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p,fps=25" \
                -g 50 -keyint_min 50 -sc_threshold 0 \
                -c:a aac -b:a 128k -ar 44100 -ac 2 \
-               -f flv -rtmp_enhanced_codecs hvc1,av01,vp09 \
-               "${RTMP_URL}${STREAM_KEY}"
+               -f flv "rtmp://127.0.0.1:1935/s/$STREAM_KEY"
